@@ -2,6 +2,21 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    async function runAI(prompt, maxTokens) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
+            image: prompt.image,
+            prompt: prompt.text,
+            max_tokens: maxTokens,
+          });
+        } catch (e) {
+          if (attempt === 1) throw e;
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+    }
+
     if (url.pathname === "/analyze" && request.method === "POST") {
       try {
         const formData = await request.formData();
@@ -13,35 +28,41 @@ export default {
         const imageBuffer = await file.arrayBuffer();
         const imageArray = [...new Uint8Array(imageBuffer)];
 
-        const titleResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
+        const titleResult = await runAI({
           image: imageArray,
-          prompt: "Give only a short, catchy stock photo title for this image, maximum " + titleLen + " characters. No extra text, just the title.",
-          max_tokens: 40,
-        });
+          text: "Give only a short, catchy stock photo title for this image, maximum " + titleLen + " characters. Reply with the title only, nothing else.",
+        }, 40);
 
-        const descResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
+        const descResult = await runAI({
           image: imageArray,
-          prompt: "Write a description of this image for a stock photo website, maximum " + descLen + " characters.",
-          max_tokens: 200,
-        });
+          text: "Write one short description of this image for a stock photo website, maximum " + descLen + " characters. Reply with the description only, nothing else.",
+        }, 200);
 
-        const keywordsResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
+        const keywordsResult = await runAI({
           image: imageArray,
-          prompt: "List exactly " + kwCount + " relevant keywords for this image separated by commas, for stock photo SEO. Only the keywords, no extra text.",
-          max_tokens: 200,
-        });
+          text: "Look at this image and list " + kwCount + " different single-word or two-word keywords describing distinct objects, colors, mood, and style visible. Do NOT repeat the same word or phrase. Reply with only a comma-separated list, no sentences, no repetition.",
+        }, 200);
 
-        const data = {
-          title: (titleResult.description || "তৈরি করা যায়নি").slice(0, titleLen),
-          description: (descResult.description || "তৈরি করা যায়নি").slice(0, descLen),
-          keywords: keywordsResult.description || "তৈরি করা যায়নি",
-        };
+        let title = (titleResult.description || "তৈরি করা যায়নি").trim().slice(0, titleLen);
+        let description = (descResult.description || "তৈরি করা যায়নি").trim().slice(0, descLen);
+
+        let rawKeywords = (keywordsResult.description || "").trim();
+        let kwArray = rawKeywords
+          .split(",")
+          .map((k) => k.trim().toLowerCase())
+          .filter((k) => k.length > 0 && k.length < 30);
+        kwArray = [...new Set(kwArray)];
+        if (kwArray.length === 0) kwArray = ["তৈরি করা যায়নি"];
+        kwArray = kwArray.slice(0, kwCount);
+        let keywords = kwArray.join(", ");
+
+        const data = { title, description, keywords };
 
         return new Response(JSON.stringify(data), {
           headers: { "content-type": "application/json" },
         });
       } catch (err) {
-        return new Response(JSON.stringify({ error: "বিশ্লেষণ করা যায়নি: " + err.message }), {
+        return new Response(JSON.stringify({ error: "বিশ্লেষণ করা যায়নি (সার্ভার একটু ব্যস্ত, আবার চেষ্টা করুন): " + err.message }), {
           headers: { "content-type": "application/json" },
         });
       }
