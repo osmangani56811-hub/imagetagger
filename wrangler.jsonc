@@ -1,1 +1,8 @@
-
+{
+  "name": "steep-river-d9e5",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-18",
+  "ai": {
+    "binding": "AI"
+  }
+}
