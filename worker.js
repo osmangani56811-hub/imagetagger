@@ -6,30 +6,34 @@ export default {
       try {
         const formData = await request.formData();
         const file = formData.get("image");
+        const titleLen = parseInt(formData.get("titleLen") || "60");
+        const descLen = parseInt(formData.get("descLen") || "150");
+        const kwCount = parseInt(formData.get("kwCount") || "15");
+
         const imageBuffer = await file.arrayBuffer();
         const imageArray = [...new Uint8Array(imageBuffer)];
 
         const titleResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
           image: imageArray,
-          prompt: "Give only a short, catchy stock photo title for this image, under 10 words. No extra text, just the title.",
-          max_tokens: 30,
+          prompt: "Give only a short, catchy stock photo title for this image, maximum " + titleLen + " characters. No extra text, just the title.",
+          max_tokens: 40,
         });
 
         const descResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
           image: imageArray,
-          prompt: "Write a detailed description of this image for a stock photo website, 2-3 sentences.",
-          max_tokens: 150,
+          prompt: "Write a description of this image for a stock photo website, maximum " + descLen + " characters.",
+          max_tokens: 200,
         });
 
         const keywordsResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
           image: imageArray,
-          prompt: "List 15 relevant keywords for this image separated by commas, for stock photo SEO. Only the keywords, no extra text.",
-          max_tokens: 150,
+          prompt: "List exactly " + kwCount + " relevant keywords for this image separated by commas, for stock photo SEO. Only the keywords, no extra text.",
+          max_tokens: 200,
         });
 
         const data = {
-          title: titleResult.description || "তৈরি করা যায়নি",
-          description: descResult.description || "তৈরি করা যায়নি",
+          title: (titleResult.description || "তৈরি করা যায়নি").slice(0, titleLen),
+          description: (descResult.description || "তৈরি করা যায়নি").slice(0, descLen),
           keywords: keywordsResult.description || "তৈরি করা যায়নি",
         };
 
@@ -52,21 +56,41 @@ export default {
 <style>
   body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 20px; text-align: center; }
   h1 { color: #2c3e50; }
-  .subtitle { color: #666; margin-bottom: 25px; }
-  #uploadBox { border: 2px dashed #2c7be5; border-radius: 10px; padding: 30px; max-width: 500px; margin: 0 auto; background: white; }
+  .subtitle { color: #666; margin-bottom: 20px; }
+  .controls { max-width: 500px; margin: 0 auto 20px auto; background: white; border-radius: 10px; padding: 18px; text-align: left; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .controlRow { margin-bottom: 16px; }
+  .controlRow label { display: flex; justify-content: space-between; font-size: 14px; color: #333; margin-bottom: 6px; font-weight: bold; }
+  .controlRow input[type="range"] { width: 100%; }
+  #uploadBox { border: 2px dashed #2c7be5; border-radius: 10px; padding: 25px; max-width: 500px; margin: 0 auto; background: white; }
   button { margin-top: 15px; padding: 12px 20px; background: #2c7be5; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
   #status { margin-top: 15px; color: #2c7be5; font-weight: bold; display: none; }
   #resultsContainer { max-width: 500px; margin: 20px auto; }
   .card { text-align: left; background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
   .card img { max-width: 100%; border-radius: 6px; margin-bottom: 10px; }
-  .card h3 { margin: 8px 0 3px 0; color: #2c7be5; font-size: 13px; }
-  .card p { margin: 0; word-break: break-word; font-size: 14px; }
-  .copyBtn { background: #eee; color: #333; padding: 4px 10px; font-size: 11px; border-radius: 5px; margin-top: 4px; }
+  .fieldBox { position: relative; background: #f8f9fa; border-radius: 6px; padding: 10px; margin-top: 8px; }
+  .fieldBox h3 { margin: 0 0 5px 0; color: #2c7be5; font-size: 12px; }
+  .fieldBox p { margin: 0; word-break: break-word; font-size: 14px; padding-right: 55px; }
+  .copyBtn { position: absolute; top: 8px; right: 8px; background: #2c7be5; color: white; padding: 4px 10px; font-size: 11px; border-radius: 5px; border: none; cursor: pointer; margin-top: 0; }
 </style>
 </head>
 <body>
   <h1>ImageTagger</h1>
   <p class="subtitle">একাধিক ছবি আপলোড করলে প্রতিটার Title, Description, Keywords তৈরি হবে</p>
+
+  <div class="controls">
+    <div class="controlRow">
+      <label>Title Length <span id="titleLenVal">60</span> অক্ষর</label>
+      <input type="range" id="titleLen" min="20" max="100" value="60">
+    </div>
+    <div class="controlRow">
+      <label>Description Length <span id="descLenVal">150</span> অক্ষর</label>
+      <input type="range" id="descLen" min="50" max="300" value="150">
+    </div>
+    <div class="controlRow">
+      <label>Keywords Count <span id="kwCountVal">15</span> টা</label>
+      <input type="range" id="kwCount" min="5" max="30" value="15">
+    </div>
+  </div>
 
   <div id="uploadBox">
     <input type="file" id="imageInput" accept="image/*" multiple>
@@ -85,6 +109,13 @@ export default {
     const status = document.getElementById('status');
     const resultsContainer = document.getElementById('resultsContainer');
     const canvas = document.getElementById('hiddenCanvas');
+
+    const titleLen = document.getElementById('titleLen');
+    const descLen = document.getElementById('descLen');
+    const kwCount = document.getElementById('kwCount');
+    titleLen.addEventListener('input', () => document.getElementById('titleLenVal').innerText = titleLen.value);
+    descLen.addEventListener('input', () => document.getElementById('descLenVal').innerText = descLen.value);
+    kwCount.addEventListener('input', () => document.getElementById('kwCountVal').innerText = kwCount.value);
 
     function resizeImage(file) {
       return new Promise((resolve) => {
@@ -105,8 +136,8 @@ export default {
       });
     }
 
-    function copyText(el) {
-      const text = el.innerText;
+    function copyText(btnEl) {
+      const text = btnEl.parentElement.querySelector('p').innerText;
       navigator.clipboard.writeText(text).catch(() => {
         const ta = document.createElement('textarea');
         ta.value = text;
@@ -115,8 +146,10 @@ export default {
         document.execCommand('copy');
         document.body.removeChild(ta);
       });
-      alert('কপি হয়েছে!');
+      btnEl.innerText = 'Copied!';
+      setTimeout(() => { btnEl.innerText = 'Copy'; }, 1500);
     }
+    window.copyText = copyText;
 
     btn.addEventListener('click', async () => {
       const files = input.files;
@@ -141,6 +174,9 @@ export default {
           const resizedBlob = await resizeImage(file);
           const formData = new FormData();
           formData.append('image', resizedBlob);
+          formData.append('titleLen', titleLen.value);
+          formData.append('descLen', descLen.value);
+          formData.append('kwCount', kwCount.value);
 
           const res = await fetch('/analyze', { method: 'POST', body: formData });
           const data = await res.json();
@@ -149,9 +185,9 @@ export default {
             card.innerHTML += '<p style="color:red;">' + data.error + '</p>';
           } else {
             card.innerHTML +=
-              '<h3>Title</h3><p>' + data.title + '</p>' +
-              '<h3>Description</h3><p>' + data.description + '</p>' +
-              '<h3>Keywords</h3><p>' + data.keywords + '</p>';
+              '<div class="fieldBox"><h3>Title</h3><p>' + data.title + '</p><button class="copyBtn" onclick="copyText(this)">Copy</button></div>' +
+              '<div class="fieldBox"><h3>Description</h3><p>' + data.description + '</p><button class="copyBtn" onclick="copyText(this)">Copy</button></div>' +
+              '<div class="fieldBox"><h3>Keywords</h3><p>' + data.keywords + '</p><button class="copyBtn" onclick="copyText(this)">Copy</button></div>';
           }
         } catch (e) {
           card.innerHTML += '<p style="color:red;">কিছু একটা ভুল হয়েছে</p>';
