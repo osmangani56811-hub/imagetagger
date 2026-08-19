@@ -2,12 +2,25 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    async function runAI(image, text, maxTokens) {
+    async function runVision(image) {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           return await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
-            image, prompt: text, max_tokens: maxTokens,
+            image,
+            prompt: "Describe this image in full detail: objects, colors, mood, style, background, and any text visible. Be thorough.",
+            max_tokens: 300,
           });
+        } catch (e) {
+          if (attempt === 1) throw e;
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+    }
+
+    async function runText(messages) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await env.AI.run("@cf/meta/llama-3.1-8b-instruct", { messages });
         } catch (e) {
           if (attempt === 1) throw e;
           await new Promise((r) => setTimeout(r, 800));
@@ -26,44 +39,42 @@ export default {
         const imageBuffer = await file.arrayBuffer();
         const imageArray = [...new Uint8Array(imageBuffer)];
 
-        const titleResult = await runAI(
-          imageArray,
-          "Write a catchy stock photo title for this image, approximately " + titleLen + " characters long (not less than " + Math.floor(titleLen * 0.6) + " characters). Reply with the title only, nothing else.",
-          Math.ceil(titleLen / 3) + 15
-        );
+        const visionResult = await runVision(imageArray);
+        const imageDescription = visionResult.description || "an image";
 
-        const descResult = await runAI(
-          imageArray,
-          "Write a detailed description of this image for a stock photo website, approximately " + descLen + " characters long (not less than " + Math.floor(descLen * 0.6) + " characters). Reply with the description only, nothing else.",
-          Math.ceil(descLen / 3) + 30
-        );
+        const prompt =
+          "Based on this image description: \"" + imageDescription + "\"\n\n" +
+          "Generate stock photo metadata. Reply with ONLY valid JSON, no other text, no markdown, in this exact format:\n" +
+          '{"title":"...","description":"...","keywords":["...","...",...]}\n\n' +
+          "Rules:\n" +
+          "- title: catchy stock photo title, as close as possible to " + titleLen + " characters (between " + Math.floor(titleLen * 0.8) + " and " + titleLen + " characters)\n" +
+          "- description: detailed description, as close as possible to " + descLen + " characters (between " + Math.floor(descLen * 0.8) + " and " + descLen + " characters)\n" +
+          "- keywords: exactly " + kwCount + " different single or two-word keywords, no duplicates, no full sentences\n";
 
-        let kwArray = [];
-        let excludeText = "";
-        for (let round = 0; round < 3 && kwArray.length < kwCount; round++) {
-          const keywordsResult = await runAI(
-            imageArray,
-            "Look at this image carefully and list " + (kwCount - kwArray.length) + " different single-word or two-word keywords describing distinct objects, colors, mood, style, and concepts visible. Do NOT repeat the same word or phrase." + excludeText + " Reply with only a comma-separated list, no sentences.",
-            Math.max(200, kwCount * 8)
-          );
-          const rawKeywords = (keywordsResult.description || "").trim();
-          const newKw = rawKeywords
-            .split(",")
-            .map((k) => k.trim().toLowerCase())
-            .filter((k) => k.length > 0 && k.length < 30);
-          for (const k of newKw) {
-            if (!kwArray.includes(k)) kwArray.push(k);
-          }
-          if (kwArray.length > 0) {
-            excludeText = " Do not repeat any of these already-used words: " + kwArray.join(", ") + ".";
-          }
+        const textResult = await runText([
+          { role: "user", content: prompt },
+        ]);
+
+        let raw = (textResult.response || "").trim();
+        raw = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          const match = raw.match(/\{[\s\S]*\}/);
+          parsed = match ? JSON.parse(match[0]) : null;
         }
-        if (kwArray.length === 0) kwArray = ["তৈরি করা যায়নি"];
-        kwArray = kwArray.slice(0, kwCount);
 
-        let title = (titleResult.description || "তৈরি করা যায়নি").trim().slice(0, titleLen);
-        let description = (descResult.description || "তৈরি করা যায়নি").trim().slice(0, descLen);
-        let keywords = kwArray.join(", ");
+        if (!parsed) throw new Error("AI থেকে সঠিক ফরম্যাটে ফলাফল পাওয়া যায়নি");
+
+        let title = (parsed.title || "তৈরি করা যায়নি").toString().trim().slice(0, titleLen);
+        let description = (parsed.description || "তৈরি করা যায়নি").toString().trim().slice(0, descLen);
+
+        let kwArray = Array.isArray(parsed.keywords) ? parsed.keywords : [];
+        kwArray = kwArray.map((k) => String(k).trim().toLowerCase()).filter((k) => k.length > 0);
+        kwArray = [...new Set(kwArray)].slice(0, kwCount);
+        let keywords = kwArray.length ? kwArray.join(", ") : "তৈরি করা যায়নি";
 
         const data = { title, description, keywords };
 
