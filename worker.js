@@ -2,13 +2,11 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    async function runAI(prompt, maxTokens) {
+    async function runAI(image, text, maxTokens) {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           return await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
-            image: prompt.image,
-            prompt: prompt.text,
-            max_tokens: maxTokens,
+            image, prompt: text, max_tokens: maxTokens,
           });
         } catch (e) {
           if (attempt === 1) throw e;
@@ -28,32 +26,43 @@ export default {
         const imageBuffer = await file.arrayBuffer();
         const imageArray = [...new Uint8Array(imageBuffer)];
 
-        const titleResult = await runAI({
-          image: imageArray,
-          text: "Give only a short, catchy stock photo title for this image, maximum " + titleLen + " characters. Reply with the title only, nothing else.",
-        }, 40);
+        const titleResult = await runAI(
+          imageArray,
+          "Write a catchy stock photo title for this image, approximately " + titleLen + " characters long (not less than " + Math.floor(titleLen * 0.6) + " characters). Reply with the title only, nothing else.",
+          Math.ceil(titleLen / 3) + 15
+        );
 
-        const descResult = await runAI({
-          image: imageArray,
-          text: "Write one short description of this image for a stock photo website, maximum " + descLen + " characters. Reply with the description only, nothing else.",
-        }, 200);
+        const descResult = await runAI(
+          imageArray,
+          "Write a detailed description of this image for a stock photo website, approximately " + descLen + " characters long (not less than " + Math.floor(descLen * 0.6) + " characters). Reply with the description only, nothing else.",
+          Math.ceil(descLen / 3) + 30
+        );
 
-        const keywordsResult = await runAI({
-          image: imageArray,
-          text: "Look at this image and list " + kwCount + " different single-word or two-word keywords describing distinct objects, colors, mood, and style visible. Do NOT repeat the same word or phrase. Reply with only a comma-separated list, no sentences, no repetition.",
-        }, 200);
+        let kwArray = [];
+        let excludeText = "";
+        for (let round = 0; round < 3 && kwArray.length < kwCount; round++) {
+          const keywordsResult = await runAI(
+            imageArray,
+            "Look at this image carefully and list " + (kwCount - kwArray.length) + " different single-word or two-word keywords describing distinct objects, colors, mood, style, and concepts visible. Do NOT repeat the same word or phrase." + excludeText + " Reply with only a comma-separated list, no sentences.",
+            Math.max(200, kwCount * 8)
+          );
+          const rawKeywords = (keywordsResult.description || "").trim();
+          const newKw = rawKeywords
+            .split(",")
+            .map((k) => k.trim().toLowerCase())
+            .filter((k) => k.length > 0 && k.length < 30);
+          for (const k of newKw) {
+            if (!kwArray.includes(k)) kwArray.push(k);
+          }
+          if (kwArray.length > 0) {
+            excludeText = " Do not repeat any of these already-used words: " + kwArray.join(", ") + ".";
+          }
+        }
+        if (kwArray.length === 0) kwArray = ["তৈরি করা যায়নি"];
+        kwArray = kwArray.slice(0, kwCount);
 
         let title = (titleResult.description || "তৈরি করা যায়নি").trim().slice(0, titleLen);
         let description = (descResult.description || "তৈরি করা যায়নি").trim().slice(0, descLen);
-
-        let rawKeywords = (keywordsResult.description || "").trim();
-        let kwArray = rawKeywords
-          .split(",")
-          .map((k) => k.trim().toLowerCase())
-          .filter((k) => k.length > 0 && k.length < 30);
-        kwArray = [...new Set(kwArray)];
-        if (kwArray.length === 0) kwArray = ["তৈরি করা যায়নি"];
-        kwArray = kwArray.slice(0, kwCount);
         let keywords = kwArray.join(", ");
 
         const data = { title, description, keywords };
@@ -105,11 +114,11 @@ export default {
     </div>
     <div class="controlRow">
       <label>Description Length <span id="descLenVal">150</span> অক্ষর</label>
-      <input type="range" id="descLen" min="50" max="300" value="150">
+      <input type="range" id="descLen" min="50" max="400" value="150">
     </div>
     <div class="controlRow">
       <label>Keywords Count <span id="kwCountVal">15</span> টা</label>
-      <input type="range" id="kwCount" min="5" max="30" value="15">
+      <input type="range" id="kwCount" min="5" max="50" value="15">
     </div>
   </div>
 
