@@ -73,7 +73,10 @@ async function handleAnalyze(request, env) {
       `Return ONLY valid JSON, no markdown, no explanation, in this exact shape: ` +
       `{"title":"...","description":"...","keywords":["...","..."]}. ` +
       `Rules: title max ${titleLen} characters. description max ${descLen} characters. ` +
-      `exactly ${kwCount} keywords, single words or short phrases, no duplicates, most relevant first.` +
+      `Provide exactly ${kwCount} keywords. Every keyword must be unique — do NOT repeat the same ` +
+      `word or a near-duplicate/variant of a word already used (e.g. if "sepia" is used, do not also ` +
+      `add "sepia tone" or "sepia toned"). Only include keywords that accurately describe something ` +
+      `actually visible in the image — never guess or invent unrelated objects. Most relevant first.` +
       (customPrompt ? ` Additional instructions: ${customPrompt}` : "");
 
     const textResp = await env.AI.run(TEXT_MODEL, {
@@ -105,15 +108,47 @@ async function handleAnalyze(request, env) {
       return Response.json({ error: "AI থেকে সঠিক JSON পাওয়া যায়নি, আবার চেষ্টা করুন। (raw: " + raw.slice(0, 120) + ")" }, { status: 500 });
     }
 
-    return Response.json({
-      title: parsed.title || "",
-      description: parsed.description || "",
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords : []
-    });
+    // --- enforce limits server-side, since the model doesn't always obey exactly ---
+    let title = String(parsed.title || "").trim();
+    if (title.length > titleLen) title = title.slice(0, titleLen).trim();
+
+    let description = String(parsed.description || "").trim();
+    if (description.length > descLen) description = description.slice(0, descLen).trim();
+
+    let keywords = Array.isArray(parsed.keywords) ? parsed.keywords : [];
+    keywords = dedupeKeywords(keywords).slice(0, kwCount);
+
+    return Response.json({ title, description, keywords });
 
   } catch (err) {
     return Response.json({ error: String(err && err.message ? err.message : err) }, { status: 500 });
   }
+}
+
+// -------------------------------------------------------------------
+// Dedupe exact + near-duplicate keywords (e.g. "sepia" vs "sepia tone")
+// -------------------------------------------------------------------
+function dedupeKeywords(list) {
+  const clean = list
+    .map(k => String(k || "").trim())
+    .filter(Boolean);
+
+  const kept = [];
+  const keptLower = [];
+
+  for (const kw of clean) {
+    const low = kw.toLowerCase();
+    const isDuplicate = keptLower.some(existing => {
+      if (existing === low) return true;
+      // treat as near-duplicate if one contains the other as a whole word/phrase
+      return existing.includes(low) || low.includes(existing);
+    });
+    if (!isDuplicate) {
+      kept.push(kw);
+      keptLower.push(low);
+    }
+  }
+  return kept;
 }
 
 // -------------------------------------------------------------------
@@ -165,6 +200,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   .slider-toggle:before{content:"";position:absolute;height:16px;width:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;}
   input:checked + .slider-toggle{background:var(--accent);}
   input:checked + .slider-toggle:before{transform:translateX(18px);}
+  .copybtn{background:#e5e7eb;color:#1b1f24;border:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;}
   .empty{text-align:center;color:var(--muted);font-size:13px;padding:30px 0;border:1px dashed var(--border);border-radius:10px;}
   .small{font-size:11px;color:var(--muted);}
 </style>
@@ -337,9 +373,30 @@ dropzone.addEventListener("drop", e=>{
 });
 fileInput.addEventListener("change", e=>addFiles(e.target.files));
 
+const fileThumbs = {};
 function addFiles(fileListObj){
-  files = files.concat(Array.from(fileListObj));
+  const newFiles = Array.from(fileListObj);
+  newFiles.forEach(f => { fileThumbs[f.name] = URL.createObjectURL(f); });
+  files = files.concat(newFiles);
   document.getElementById("fileList").textContent = files.length + " files selected";
+}
+
+function copyText(text){
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(()=>fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text){
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand("copy"); } catch(e){}
+  document.body.removeChild(ta);
 }
 
 document.getElementById("clearBtn").addEventListener("click", ()=>{
@@ -396,63 +453,4 @@ async function analyzeOne(file, titleLen, descLen, kwCount, customPrompt){
       results.push({ file: file.name, error: data.error });
     } else {
       results.push({ file: file.name, ...data });
-      saveToHistory({ file: file.name, ...data, date: new Date().toISOString() });
-    }
-  } catch(err){
-    results.push({ file: file.name, error: String(err) });
-  }
-  renderResults();
-}
-
-function renderResults(){
-  const box = document.getElementById("results");
-  document.getElementById("resultsTitle").textContent = "Generated Metadata (" + results.length + ")";
-  if (results.length === 0){
-    box.innerHTML = '<div class="empty">Results will appear here after generation.</div>';
-    return;
-  }
-  box.innerHTML = results.map(r=>{
-    if (r.error){
-      return '<div class="result"><h3>' + r.file + '</h3><p style="color:#d9362f;">⚠ ' + r.error + '</p></div>';
-    }
-    return '<div class="result"><h3>' + r.file + '</h3>' +
-      '<p><b>Title:</b> ' + (r.title||"") + '</p>' +
-      '<p><b>Description:</b> ' + (r.description||"") + '</p>' +
-      '<div class="kw">' + (r.keywords||[]).map(k=>'<span>'+k+'</span>').join("") + '</div>' +
-      '</div>';
-  }).join("");
-}
-
-function exportCSV(){
-  if (results.length === 0){ alert("এখনও কোনো ফলাফল নেই।"); return; }
-  let csv = "Filename,Title,Description,Keywords\\n";
-  results.forEach(r=>{
-    if (r.error) return;
-    const row = [r.file, r.title, r.description, (r.keywords||[]).join("|")]
-      .map(v => '"' + String(v||"").replace(/"/g,'""') + '"').join(",");
-    csv += row + "\\n";
-  });
-  const blob = new Blob([csv], { type:"text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "imagetagger_export.csv";
-  a.click();
-}
-
-function saveToHistory(entry){
-  const hist = JSON.parse(localStorage.getItem("imgtagger_history") || "[]");
-  hist.unshift(entry);
-  localStorage.setItem("imgtagger_history", JSON.stringify(hist.slice(0, 200)));
-}
-
-function showHistory(){
-  const hist = JSON.parse(localStorage.getItem("imgtagger_history") || "[]");
-  if (hist.length === 0){ alert("হিস্টোরি খালি।"); return; }
-  results = hist.map(h => ({ file:h.file, title:h.title, description:h.description, keywords:h.keywords }));
-  renderResults();
-}
-
-function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
-</script>
-</body>
-</html>`;
+      saveToHistory({ file: file.name, ...d
