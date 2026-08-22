@@ -19,6 +19,12 @@ const PLATFORM_RULES = {
   vecteezy:  "Vecteezy style: emphasize vector/illustration terms if relevant."
 };
 
+const FILLER_WORDS = [
+  "close-up","close up", "closeup", "eye-catching", "eye catching",
+  "attractive", "beautiful", "amazing", "stunning", "gorgeous",
+  "lovely", "nice", "great", "wonderful", "fantastic", "style"
+];
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -76,7 +82,9 @@ async function handleAnalyze(request, env) {
       `Provide exactly ${kwCount} keywords. Every keyword must be unique — do NOT repeat the same ` +
       `word or a near-duplicate/variant of a word already used (e.g. if "sepia" is used, do not also ` +
       `add "sepia tone" or "sepia toned"). Only include keywords that accurately describe something ` +
-      `actually visible in the image — never guess or invent unrelated objects. Most relevant first.` +
+      `actually visible in the image — never guess or invent unrelated objects. Do NOT use vague ` +
+      `filler/marketing words like "close-up", "eye-catching", "attractive", "beautiful", "amazing" — ` +
+      `use concrete, specific, searchable terms only. Most relevant first.` +
       (customPrompt ? ` Additional instructions: ${customPrompt}` : "");
 
     const textResp = await env.AI.run(TEXT_MODEL, {
@@ -116,7 +124,9 @@ async function handleAnalyze(request, env) {
     if (description.length > descLen) description = description.slice(0, descLen).trim();
 
     let keywords = Array.isArray(parsed.keywords) ? parsed.keywords : [];
-    keywords = dedupeKeywords(keywords).slice(0, kwCount);
+    keywords = keywords.filter(k => !FILLER_WORDS.includes(String(k).trim().toLowerCase()));
+    keywords = dedupeKeywords(keywords);
+    keywords = keywords.slice(0, kwCount); // HARD LIMIT — never exceed requested count
 
     return Response.json({ title, description, keywords });
 
@@ -437,20 +447,4 @@ async function generateAll(){
   }
 }
 
-async function analyzeOne(file, titleLen, descLen, kwCount, customPrompt){
-  const fd = new FormData();
-  fd.append("image", file);
-  fd.append("titleLen", titleLen);
-  fd.append("descLen", descLen);
-  fd.append("kwCount", kwCount);
-  fd.append("platform", currentPlatform);
-  fd.append("customPrompt", customPrompt);
-
-  try{
-    const res = await fetch("/api/analyze", { method:"POST", body: fd });
-    const data = await res.json();
-    if (data.error){
-      results.push({ file: file.name, error: data.error });
-    } else {
-      results.push({ file: file.name, ...data });
-      saveToHistory({ file: file.name, ...d
+async function analyzeOne(file, titleLen, descLen, kwCou
