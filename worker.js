@@ -447,4 +447,4 @@ async function generateAll(){
   }
 }
 
-async function analyzeOne(file, titleLen, descLen, kwCou
+async function analyzeOne(file, titleLen, descLen, kwCo
