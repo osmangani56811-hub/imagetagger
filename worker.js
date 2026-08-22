@@ -84,7 +84,12 @@ async function handleAnalyze(request, env) {
       max_tokens: 800
     });
 
-    let raw = (textResp.response || "").trim();
+    let raw = textResp.response;
+    if (typeof raw !== "string") {
+      // Some model responses come back as an object/array instead of plain text
+      raw = JSON.stringify(raw || "");
+    }
+    raw = raw.trim();
     raw = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
 
     let parsed;
@@ -96,8 +101,8 @@ async function handleAnalyze(request, env) {
       parsed = match ? JSON.parse(match[0]) : null;
     }
 
-    if (!parsed) {
-      return Response.json({ error: "AI থেকে সঠিক JSON পাওয়া যায়নি, আবার চেষ্টা করুন।" }, { status: 500 });
+    if (!parsed || typeof parsed !== "object") {
+      return Response.json({ error: "AI থেকে সঠিক JSON পাওয়া যায়নি, আবার চেষ্টা করুন। (raw: " + raw.slice(0, 120) + ")" }, { status: 500 });
     }
 
     return Response.json({
@@ -451,4 +456,3 @@ function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 </script>
 </body>
 </html>`;
-      
