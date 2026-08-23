@@ -82,9 +82,11 @@ async function handleAnalyze(request, env) {
       `Provide exactly ${kwCount} keywords. Every keyword must be unique — do NOT repeat the same ` +
       `word or a near-duplicate/variant of a word already used (e.g. if "sepia" is used, do not also ` +
       `add "sepia tone" or "sepia toned"). Only include keywords that accurately describe something ` +
-      `actually visible in the image — never guess or invent unrelated objects. Do NOT use vague ` +
-      `filler/marketing words like "close-up", "eye-catching", "attractive", "beautiful", "amazing" — ` +
-      `use concrete, specific, searchable terms only. Most relevant first.` +
+      `actually visible in the image — never guess or invent unrelated objects. NEVER use vague ` +
+      `filler/marketing words anywhere — not in the title, not in the description, not in the keywords. ` +
+      `Banned words/phrases: "close-up", "close up", "closeup", "eye-catching", "attractive", "beautiful", ` +
+      `"amazing", "stunning", "gorgeous", "lovely", "nice", "great", "wonderful", "fantastic". ` +
+      `Use concrete, specific, searchable terms only. Most relevant keywords first.` +
       (customPrompt ? ` Additional instructions: ${customPrompt}` : "");
 
     const textResp = await env.AI.run(TEXT_MODEL, {
@@ -116,11 +118,11 @@ async function handleAnalyze(request, env) {
       return Response.json({ error: "AI থেকে সঠিক JSON পাওয়া যায়নি, আবার চেষ্টা করুন। (raw: " + raw.slice(0, 120) + ")" }, { status: 500 });
     }
 
-    // --- enforce limits server-side, since the model doesn't always obey exactly ---
-    let title = String(parsed.title || "").trim();
+    // --- enforce limits + strip filler words server-side, since the model doesn't always obey ---
+    let title = stripFillerText(String(parsed.title || "").trim());
     if (title.length > titleLen) title = title.slice(0, titleLen).trim();
 
-    let description = String(parsed.description || "").trim();
+    let description = stripFillerText(String(parsed.description || "").trim());
     if (description.length > descLen) description = description.slice(0, descLen).trim();
 
     let keywords = Array.isArray(parsed.keywords) ? parsed.keywords : [];
@@ -133,6 +135,22 @@ async function handleAnalyze(request, env) {
   } catch (err) {
     return Response.json({ error: String(err && err.message ? err.message : err) }, { status: 500 });
   }
+}
+
+// -------------------------------------------------------------------
+// Remove filler/marketing words from free text (title/description)
+// -------------------------------------------------------------------
+function stripFillerText(text) {
+  let out = text;
+  FILLER_WORDS.forEach(w => {
+    const re = new RegExp("\\b" + w.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\b", "gi");
+    out = out.replace(re, "");
+  });
+  out = out.replace(/\s+of\s+a\b/gi, " a").replace(/\s+of\s+an\b/gi, " an"); // clean "of a" left dangling
+  out = out.replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim();
+  // capitalize first letter if it got lowercased by the cleanup
+  if (out) out = out.charAt(0).toUpperCase() + out.slice(1);
+  return out;
 }
 
 // -------------------------------------------------------------------
@@ -211,6 +229,10 @@ const HTML_PAGE = `<!DOCTYPE html>
   input:checked + .slider-toggle{background:var(--accent);}
   input:checked + .slider-toggle:before{transform:translateX(18px);}
   .copybtn{background:#e5e7eb;color:#1b1f24;border:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;}
+  .field-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin:6px 0;}
+  .field-row .field-text{flex:1;}
+  .field-row .copybtn{flex-shrink:0;}
+  .kwhead{display:flex;justify-content:space-between;align-items:center;margin:8px 0 4px;}
   .empty{text-align:center;color:var(--muted);font-size:13px;padding:30px 0;border:1px dashed var(--border);border-radius:10px;}
   .small{font-size:11px;color:var(--muted);}
 </style>
@@ -487,13 +509,13 @@ function renderResults(){
     }
     return '<div class="result">' +
       '<h3>' + thumb + r.file + '</h3>' +
-      '<p><b>Title:</b> ' + (r.title||"") + ' <button class="copybtn" data-idx="'+idx+'" data-field="title">Copy</button></p>' +
-      '<p><b>Description:</b> ' + (r.description||"") + ' <button class="copybtn" data-idx="'+idx+'" data-field="description">Copy</button></p>' +
+      '<div class="field-row"><div class="field-text"><b>Title:</b> ' + (r.title||"") + '</div>' +
+        '<button class="copybtn" data-idx="'+idx+'" data-field="title">Copy</button></div>' +
+      '<div class="field-row"><div class="field-text"><b>Description:</b> ' + (r.description||"") + '</div>' +
+        '<button class="copybtn" data-idx="'+idx+'" data-field="description">Copy</button></div>' +
+      '<div class="kwhead"><b>Keywords:</b>' +
+        '<button class="copybtn" data-idx="'+idx+'" data-field="keywords">Copy</button></div>' +
       '<div class="kw">' + (r.keywords||[]).map(k=>'<span>'+k+'</span>').join("") + '</div>' +
-      '<div class="btnrow" style="margin-top:8px;">' +
-        '<button class="copybtn" data-idx="'+idx+'" data-field="keywords" style="background:#4b5563;color:#fff;">Copy Keywords</button>' +
-        '<button class="copybtn" data-idx="'+idx+'" data-field="all" style="background:var(--accent);color:#fff;">Copy All</button>' +
-      '</div>' +
       '</div>';
   }).join("");
 }
@@ -508,9 +530,6 @@ document.getElementById("results").addEventListener("click", (e)=>{
   if (btn.dataset.field === "title") text = r.title || "";
   else if (btn.dataset.field === "description") text = r.description || "";
   else if (btn.dataset.field === "keywords") text = (r.keywords||[]).join(", ");
-  else if (btn.dataset.field === "all") {
-    text = "Title: " + (r.title||"") + "\\n\\nDescription: " + (r.description||"") + "\\n\\nKeywords: " + (r.keywords||[]).join(", ");
-  }
   copyText(text);
   const old = btn.textContent;
   btn.textContent = "✓ Copied";
