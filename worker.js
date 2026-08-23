@@ -447,4 +447,106 @@ async function generateAll(){
   }
 }
 
-async function analyzeOne(file, titleLen, descLen, kwCo
+async function analyzeOne(file, titleLen, descLen, kwCount, customPrompt){
+  const fd = new FormData();
+  fd.append("image", file);
+  fd.append("titleLen", titleLen);
+  fd.append("descLen", descLen);
+  fd.append("kwCount", kwCount);
+  fd.append("platform", currentPlatform);
+  fd.append("customPrompt", customPrompt);
+
+  try{
+    const res = await fetch("/api/analyze", { method:"POST", body: fd });
+    const data = await res.json();
+    if (data.error){
+      results.push({ file: file.name, error: data.error });
+    } else {
+      results.push({ file: file.name, ...data });
+      saveToHistory({ file: file.name, ...data, date: new Date().toISOString() });
+    }
+  } catch(err){
+    results.push({ file: file.name, error: String(err) });
+  }
+  renderResults();
+}
+
+function renderResults(){
+  const box = document.getElementById("results");
+  document.getElementById("resultsTitle").textContent = "Generated Metadata (" + results.length + ")";
+  if (results.length === 0){
+    box.innerHTML = '<div class="empty">Results will appear here after generation.</div>';
+    return;
+  }
+  box.innerHTML = results.map((r, idx)=>{
+    const thumb = fileThumbs[r.file]
+      ? '<img src="' + fileThumbs[r.file] + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;">'
+      : '';
+    if (r.error){
+      return '<div class="result"><h3>' + thumb + r.file + '</h3><p style="color:#d9362f;">⚠ ' + r.error + '</p></div>';
+    }
+    return '<div class="result">' +
+      '<h3>' + thumb + r.file + '</h3>' +
+      '<p><b>Title:</b> ' + (r.title||"") + ' <button class="copybtn" data-idx="'+idx+'" data-field="title">Copy</button></p>' +
+      '<p><b>Description:</b> ' + (r.description||"") + ' <button class="copybtn" data-idx="'+idx+'" data-field="description">Copy</button></p>' +
+      '<div class="kw">' + (r.keywords||[]).map(k=>'<span>'+k+'</span>').join("") + '</div>' +
+      '<div class="btnrow" style="margin-top:8px;">' +
+        '<button class="copybtn" data-idx="'+idx+'" data-field="keywords" style="background:#4b5563;color:#fff;">Copy Keywords</button>' +
+        '<button class="copybtn" data-idx="'+idx+'" data-field="all" style="background:var(--accent);color:#fff;">Copy All</button>' +
+      '</div>' +
+      '</div>';
+  }).join("");
+}
+
+document.getElementById("results").addEventListener("click", (e)=>{
+  const btn = e.target.closest(".copybtn");
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.idx, 10);
+  const r = results[idx];
+  if (!r) return;
+  let text = "";
+  if (btn.dataset.field === "title") text = r.title || "";
+  else if (btn.dataset.field === "description") text = r.description || "";
+  else if (btn.dataset.field === "keywords") text = (r.keywords||[]).join(", ");
+  else if (btn.dataset.field === "all") {
+    text = "Title: " + (r.title||"") + "\\n\\nDescription: " + (r.description||"") + "\\n\\nKeywords: " + (r.keywords||[]).join(", ");
+  }
+  copyText(text);
+  const old = btn.textContent;
+  btn.textContent = "✓ Copied";
+  setTimeout(()=>{ btn.textContent = old; }, 1200);
+});
+
+function exportCSV(){
+  if (results.length === 0){ alert("এখনও কোনো ফলাফল নেই।"); return; }
+  let csv = "Filename,Title,Description,Keywords\\n";
+  results.forEach(r=>{
+    if (r.error) return;
+    const row = [r.file, r.title, r.description, (r.keywords||[]).join("|")]
+      .map(v => '"' + String(v||"").replace(/"/g,'""') + '"').join(",");
+    csv += row + "\\n";
+  });
+  const blob = new Blob([csv], { type:"text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "imagetagger_export.csv";
+  a.click();
+}
+
+function saveToHistory(entry){
+  const hist = JSON.parse(localStorage.getItem("imgtagger_history") || "[]");
+  hist.unshift(entry);
+  localStorage.setItem("imgtagger_history", JSON.stringify(hist.slice(0, 200)));
+}
+
+function showHistory(){
+  const hist = JSON.parse(localStorage.getItem("imgtagger_history") || "[]");
+  if (hist.length === 0){ alert("হিস্টোরি খালি।"); return; }
+  results = hist.map(h => ({ file:h.file, title:h.title, description:h.description, keywords:h.keywords }));
+  renderResults();
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+</script>
+</body>
+</html>`;
